@@ -38,6 +38,8 @@ function safeDecryptAndLog(encryptedJsonStr, passphrase) {
     // Parse the decrypted content
     const decryptedData = JSON.parse(decrypted.toString("utf8"));
 
+    console.log("Decrypted data:", decryptedData);
+
     return {
       success: true,
       decrypted: decryptedData,
