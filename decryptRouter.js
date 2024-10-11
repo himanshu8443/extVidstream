@@ -3,49 +3,25 @@ const { safeDecryptAndLog } = require("./decryptionUtils");
 
 const router = express.Router();
 
-router.get("/decrypt", async (req, res) => {
-  const { url, passphrase } = req.query;
+router.post("/decrypt", async (req, res) => {
+  const contents = req?.body;
+  const passphrase = req?.query?.passphrase;
 
-  if (!url || !passphrase) {
-    return res.status(400).json({ error: "URL and passphrase are required" });
+  if (!contents || !passphrase) {
+    return res.status(400).json({ error: "Missing required fields" });
+  }
+
+  console.log("Decryption request received with passphrase:", passphrase);
+  console.log("Contents:", contents);
+
+  // Decrypt the content
+  const decryptionResult = safeDecryptAndLog(contents, passphrase);
+
+  if (!decryptionResult.success) {
+    return res.status(400).json({ error: decryptionResult.error });
   }
 
   try {
-    // Fetch the content from the provided URL
-    const response = await fetch(url, {
-      credentials: "omit",
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:101.0) Gecko/20100101 Firefox/101.0",
-        Accept: "*/*",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Sec-Fetch-Dest": "empty",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "cross-site",
-        Pragma: "no-cache",
-        "Cache-Control": "no-cache",
-      },
-      referrer: "https://vidstreaming.xyz/",
-      method: "GET",
-      mode: "cors",
-    });
-    const data = await response.text();
-
-    // Extract the encrypted content
-    const contents =
-      data.match(/const\s+Contents\s*=\s*['"]({.*})['"]/)?.[1] || "";
-
-    if (!contents) {
-      return res.status(404).json({ error: "Encrypted content not found" });
-    }
-
-    // Decrypt the content
-    const decryptionResult = safeDecryptAndLog(contents, passphrase);
-
-    if (!decryptionResult.success) {
-      return res.status(400).json({ error: decryptionResult.error });
-    }
-
     // Return the decrypted data
     function extractVideoDetailsUsingRegex(configString) {
       // Regex to match the video URL in the sources array
