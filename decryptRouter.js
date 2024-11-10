@@ -1,5 +1,5 @@
 const express = require("express");
-const { safeDecryptAndLog } = require("./decryptionUtils");
+const { safeDecryptAndLog } = require("./util/decryptionUtils");
 
 const router = express.Router();
 
