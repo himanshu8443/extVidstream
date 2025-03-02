@@ -15,16 +15,20 @@ router.post("/cinemaluxe", async (req, res) => {
     const data = await response.text();
 
     const regex = /var item = (\{.*?\});/s; // Extracts the full object inside `{}` including newlines
+    const optionRegex = /var options = (\{.*?\});/s; // Extracts the full object inside `{}` including newlines
+    const optionsMatch = data.match(optionRegex);
     const match = data.match(regex);
 
     if (match) {
+      const optionsObject = optionsMatch[1]; // Extract the full object as a string
       const itemObject = match[1]; // Extract the full object as a string
       console.log("Extracted item object:", itemObject);
       // Convert the extracted string into a JavaScript object
       try {
         let parsedItem = JSON.parse(itemObject);
+        const parsedOptions = JSON.parse(optionsObject);
         // console.log("Parsed JSON Object:", parsedItem);
-        const redirectUrl = await submitForm(parsedItem);
+        const redirectUrl = await submitForm(parsedItem, parsedOptions);
         res.json({ redirectUrl });
       } catch (error) {
         console.error("Error parsing JSON object:", error);
@@ -39,13 +43,13 @@ router.post("/cinemaluxe", async (req, res) => {
   }
 });
 
-async function submitForm(details, tryCount = 0) {
+async function submitForm(details, parsedOptions, tryCount = 0) {
   // Make tryCount a parameter with default value
   var data = new URLSearchParams();
   for (const property in details) {
     data.append(property, details[property]);
   }
-  data.append("action", "651ac446");
+  data.append("action", parsedOptions.soralink_z);
 
   console.log("Form data:", data.toString());
   console.log("Current try count:⭐⭐⭐⭐", tryCount);
