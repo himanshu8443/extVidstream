@@ -97,7 +97,7 @@ async function submitForm(details, parsedOptions, tryCount = 0) {
     } else if (response.status === 200) {
       if (tryCount < maxTries) {
         console.log("Retrying form submission, try count:🔥", tryCount + 1);
-        return submitForm(details, tryCount + 1); // Pass the incremented tryCount
+        return submitForm(details, parsedOptions, tryCount + 1);
       } else {
         console.log("Maximum retries reached");
       }
