@@ -2,7 +2,30 @@ const generateWhvxToken = async () => {
   try {
     // Fetch the WASM binary from the favicon URL
     const response = await fetch("https://www.vidbinge.com/favicon.png");
+
+    // Check if the response is ok and has the correct content type
+    if (!response.ok) {
+      throw new Error(`Failed to fetch WASM: HTTP status ${response.status}`);
+    }
+
+    const contentType = response.headers.get("content-type");
+    if (contentType && contentType.includes("text/html")) {
+      throw new Error(`Received HTML instead of WASM binary`);
+    }
+
     const wasmArrayBuffer = await response.arrayBuffer();
+
+    // Check for WebAssembly magic bytes (00 61 73 6d)
+    const firstBytes = new Uint8Array(wasmArrayBuffer.slice(0, 4));
+    const isMagicBytesValid =
+      firstBytes[0] === 0x00 &&
+      firstBytes[1] === 0x61 &&
+      firstBytes[2] === 0x73 &&
+      firstBytes[3] === 0x6d;
+
+    if (!isMagicBytesValid) {
+      throw new Error(`Invalid WebAssembly format: missing magic bytes`);
+    }
 
     // Import definition similar to the original code
     const imports = {
@@ -60,6 +83,7 @@ const generateWhvxToken = async () => {
     return token;
   } catch (error) {
     console.error("Error generating token:", error);
+    return null;
   }
 };
 
