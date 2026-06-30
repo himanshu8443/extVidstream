@@ -5,7 +5,7 @@ const https = require("https");
 const router = express.Router();
 
 const SECRET_B64 = "76iRl07s0xSN9jqmEWAt79EBJZulIQIsV64FZr2O";
-const BASE_URL = "https://api4.aoneroom.com";
+const BASE_URL = "https://api6.aoneroom.com";
 const AUTH =
   "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjI2MDU1NDM3NjM5MzQxNzE5MjgsImV4cCI6MTc4NzY1NDY5MywiaWF0IjoxNzc5ODc4MzkzfQ.dUX9F_JSed-CiWANFqpCfmNNb3BQyQ1NqpfYzpLxvMI";
 
