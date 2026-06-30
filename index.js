@@ -3,6 +3,7 @@ const decryptRouter = require("./decryptRouter");
 const whvxTokenRouter = require("./whvxTokenRouter");
 const cinemaLuxeRouter = require("./cinemaLuxeDecrypt");
 const vidsrcRouter = require("./vidsrc/vidsrcRoute");
+const proxyRouter = require("./proxyRouter");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -16,6 +17,7 @@ app.use("/api", decryptRouter);
 app.use("/api", whvxTokenRouter);
 app.use("/api", cinemaLuxeRouter);
 app.use("/api", vidsrcRouter);
+app.use("/api", proxyRouter);
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
