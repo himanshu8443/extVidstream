@@ -7,6 +7,7 @@ const router = express.Router();
 const SECRET_B64 = "76iRl07s0xSN9jqmEWAt79EBJZulIQIsV64FZr2O";
 const BASE_URL = "https://api4.aoneroom.com";
 const RESOURCE_BASE_URL = "https://apig.inmoviebox.com";
+const MAX_UPSTREAM_RETRIES = 3;
 const AUTH =
   "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjI2MDU1NDM3NjM5MzQxNzE5MjgsImV4cCI6MTc4NzY1NDY5MywiaWF0IjoxNzc5ODc4MzkzfQ.dUX9F_JSed-CiWANFqpCfmNNb3BQyQ1NqpfYzpLxvMI";
 
@@ -122,18 +123,58 @@ function createHeaders(method, fullUrl, body, auth) {
   return headers;
 }
 
-function requestUpstream(fullUrl, method, body, auth, callback) {
+function requestUpstream(
+  fullUrl,
+  method,
+  body,
+  auth,
+  callback,
+  retryCount = 0,
+) {
   const proxyReq = https.request(
     new URL(fullUrl),
     { method, headers: createHeaders(method, fullUrl, body, auth) },
     (proxyRes) => {
       const chunks = [];
       proxyRes.on("data", (chunk) => chunks.push(chunk));
-      proxyRes.on("end", () => callback(null, proxyRes, Buffer.concat(chunks)));
+      proxyRes.on("end", () => {
+        if (proxyRes.statusCode >= 500 && retryCount < MAX_UPSTREAM_RETRIES) {
+          requestUpstream(
+            fullUrl,
+            method,
+            body,
+            auth,
+            callback,
+            retryCount + 1,
+          );
+          return;
+        }
+        callback(null, proxyRes, Buffer.concat(chunks));
+      });
+      proxyRes.on("error", (error) => {
+        if (retryCount < MAX_UPSTREAM_RETRIES) {
+          requestUpstream(
+            fullUrl,
+            method,
+            body,
+            auth,
+            callback,
+            retryCount + 1,
+          );
+          return;
+        }
+        callback(error);
+      });
     },
   );
 
-  proxyReq.on("error", (error) => callback(error));
+  proxyReq.on("error", (error) => {
+    if (retryCount < MAX_UPSTREAM_RETRIES) {
+      requestUpstream(fullUrl, method, body, auth, callback, retryCount + 1);
+      return;
+    }
+    callback(error);
+  });
   if (body) {
     proxyReq.write(body);
   }
