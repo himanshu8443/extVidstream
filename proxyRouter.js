@@ -138,7 +138,12 @@ function requestUpstream(
       const chunks = [];
       proxyRes.on("data", (chunk) => chunks.push(chunk));
       proxyRes.on("end", () => {
-        if (proxyRes.statusCode >= 500 && retryCount < MAX_UPSTREAM_RETRIES) {
+        const shouldRetry =
+          proxyRes.statusCode >= 500 ||
+          (proxyRes.statusCode === 406 &&
+            new URL(fullUrl).pathname ===
+              "/wefeed-mobile-bff/subject-api/resource");
+        if (shouldRetry && retryCount < MAX_UPSTREAM_RETRIES) {
           requestUpstream(
             fullUrl,
             method,
