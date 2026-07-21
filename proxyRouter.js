@@ -186,13 +186,46 @@ function requestUpstream(
   proxyReq.end();
 }
 
+function getDetectorResources(detector, resourceUrl) {
+  if (
+    Array.isArray(detector.resolutionList) &&
+    detector.resolutionList.length
+  ) {
+    return detector.resolutionList;
+  }
+  if (!detector.downloadUrl) {
+    return [];
+  }
+
+  const episode = Number(resourceUrl.searchParams.get("epFrom")) || 1;
+  return [
+    {
+      episode,
+      title: `Episode ${episode}`,
+      resourceLink: detector.downloadUrl,
+      linkType: detector.type ?? 0,
+      size: detector.firstSize || detector.totalSize || "0",
+      uploadBy: detector.uploadBy || "",
+      resourceId: detector.resourceId || "",
+      postId: detector.postId || "",
+      extCaptions: detector.extCaptions || [],
+      se: Number(resourceUrl.searchParams.get("se")) || 0,
+      ep: episode,
+      sourceUrl: detector.resourceLink || "",
+      resolution: Number(resourceUrl.searchParams.get("resolution")) || null,
+    },
+  ];
+}
+
 function buildResourceFallback(detail, resourceUrl) {
   const detectors = Array.isArray(detail.resourceDetectors)
     ? detail.resourceDetectors
     : detail.resourceDetectors
       ? [detail.resourceDetectors]
       : [];
-  let list = detectors.flatMap((detector) => detector.resolutionList || []);
+  let list = detectors.flatMap((detector) =>
+    getDetectorResources(detector, resourceUrl),
+  );
   const resolution = Number(resourceUrl.searchParams.get("resolution"));
   if (resolution > 0) {
     list = list.filter((resource) => resource.resolution === resolution);
