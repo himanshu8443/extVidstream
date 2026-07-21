@@ -10,6 +10,7 @@ const RESOURCE_BASE_URL = "https://apig.inmoviebox.com";
 const MAX_UPSTREAM_RETRIES = 3;
 const AUTH =
   "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjI2MDU1NDM3NjM5MzQxNzE5MjgsImV4cCI6MTc4NzY1NDY5MywiaWF0IjoxNzc5ODc4MzkzfQ.dUX9F_JSed-CiWANFqpCfmNNb3BQyQ1NqpfYzpLxvMI";
+const gatewayTimeOffsets = new Map();
 
 const CLIENT_INFO = JSON.stringify({
   package_name: "com.community.oneroom",
@@ -56,10 +57,13 @@ function getTargetPath(reqUrl, directPath) {
     : targetUrl.pathname + targetUrl.search;
 }
 
-function signRequest(method, url, bodyStr) {
+function decodeQueryComponent(value) {
+  return decodeURIComponent(value.replace(/\+/g, " "));
+}
+
+function signRequest(method, url, bodyStr, timestampMs = Date.now()) {
   const u = new URL(url);
   const m = method.toUpperCase();
-  const timestampMs = Date.now();
   const rawQuery = u.search.slice(1);
   let signedPath = u.pathname;
 
@@ -72,7 +76,7 @@ function signRequest(method, url, bodyStr) {
           const i = p.indexOf("=");
           const k = i < 0 ? p : p.slice(0, i);
           const v = i < 0 ? "" : p.slice(i + 1);
-          return [decodeURIComponent(k), decodeURIComponent(v)];
+          return [decodeQueryComponent(k), decodeQueryComponent(v)];
         })
         .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
         .map(([k, v]) => k + "=" + v)
@@ -103,14 +107,14 @@ function signRequest(method, url, bodyStr) {
   return timestampMs + "|2|" + hmac;
 }
 
-function createHeaders(method, fullUrl, body, auth) {
+function createHeaders(method, fullUrl, body, auth, timestampMs) {
   const headers = {
     Accept: "*/*",
     Authorization: auth,
     "User-Agent":
       "com.community.oneroom/50020067 (Linux; U; Android 16; en_US; 23122PCD1I; Build/BP2A.250605.031.A3; Cronet/148.0.7778.60)",
     "X-Client-Info": CLIENT_INFO,
-    "x-tr-signature": signRequest(method, fullUrl, body),
+    "x-tr-signature": signRequest(method, fullUrl, body, timestampMs),
     "X-Client-Status": "1",
     "X-Play-Mode": "1",
     "X-Family-Mode": "0",
@@ -131,18 +135,41 @@ function requestUpstream(
   callback,
   retryCount = 0,
 ) {
+  const upstreamUrl = new URL(fullUrl);
+  const offsetKey = upstreamUrl.hostname;
+  const timestampMs = Date.now() + (gatewayTimeOffsets.get(offsetKey) || 0);
   const proxyReq = https.request(
-    new URL(fullUrl),
-    { method, headers: createHeaders(method, fullUrl, body, auth) },
+    upstreamUrl,
+    {
+      method,
+      headers: createHeaders(method, fullUrl, body, auth, timestampMs),
+    },
     (proxyRes) => {
       const chunks = [];
       proxyRes.on("data", (chunk) => chunks.push(chunk));
       proxyRes.on("end", () => {
+        const responseBody = Buffer.concat(chunks);
+        if (proxyRes.statusCode === 407) {
+          try {
+            const errorResponse = JSON.parse(responseBody.toString("utf8"));
+            const encodedTime = errorResponse.metadata?.errorMsg;
+            if (
+              errorResponse.metadata?.errorCode === "GW.4410" &&
+              encodedTime
+            ) {
+              const timeData = JSON.parse(
+                Buffer.from(encodedTime, "base64").toString("utf8"),
+              );
+              gatewayTimeOffsets.set(offsetKey, timeData.time - Date.now());
+            }
+          } catch {}
+        }
+
         const shouldRetry =
+          proxyRes.statusCode === 407 ||
           proxyRes.statusCode >= 500 ||
           (proxyRes.statusCode === 406 &&
-            new URL(fullUrl).pathname ===
-              "/wefeed-mobile-bff/subject-api/resource");
+            upstreamUrl.pathname === "/wefeed-mobile-bff/subject-api/resource");
         if (shouldRetry && retryCount < MAX_UPSTREAM_RETRIES) {
           requestUpstream(
             fullUrl,
@@ -154,7 +181,7 @@ function requestUpstream(
           );
           return;
         }
-        callback(null, proxyRes, Buffer.concat(chunks));
+        callback(null, proxyRes, responseBody);
       });
       proxyRes.on("error", (error) => {
         if (retryCount < MAX_UPSTREAM_RETRIES) {
@@ -184,6 +211,24 @@ function requestUpstream(
     proxyReq.write(body);
   }
   proxyReq.end();
+}
+
+function requestUpstreamAsync(fullUrl, method, body, auth) {
+  return new Promise((resolve, reject) => {
+    requestUpstream(
+      fullUrl,
+      method,
+      body,
+      auth,
+      (error, response, responseBody) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve({ response, body: responseBody });
+      },
+    );
+  });
 }
 
 function getDetectorResources(detector, resourceUrl) {
@@ -217,15 +262,7 @@ function getDetectorResources(detector, resourceUrl) {
   ];
 }
 
-function buildResourceFallback(detail, resourceUrl) {
-  const detectors = Array.isArray(detail.resourceDetectors)
-    ? detail.resourceDetectors
-    : detail.resourceDetectors
-      ? [detail.resourceDetectors]
-      : [];
-  let list = detectors.flatMap((detector) =>
-    getDetectorResources(detector, resourceUrl),
-  );
+function buildResourceResponse(list, resourceUrl) {
   const resolution = Number(resourceUrl.searchParams.get("resolution"));
   if (resolution > 0) {
     list = list.filter((resource) => resource.resolution === resolution);
@@ -247,6 +284,69 @@ function buildResourceFallback(detail, resourceUrl) {
       list,
     },
   };
+}
+
+function buildResourceFallback(detail, resourceUrl) {
+  const detectors = Array.isArray(detail.resourceDetectors)
+    ? detail.resourceDetectors
+    : detail.resourceDetectors
+      ? [detail.resourceDetectors]
+      : [];
+  const list = detectors.flatMap((detector) =>
+    getDetectorResources(detector, resourceUrl),
+  );
+  return buildResourceResponse(list, resourceUrl);
+}
+
+function getSeriesResourceLinks(detail, resourceUrl) {
+  const detectors = Array.isArray(detail.resourceDetectors)
+    ? detail.resourceDetectors
+    : [];
+  const season = Number(resourceUrl.searchParams.get("se")) || 1;
+  const epFrom = Number(resourceUrl.searchParams.get("epFrom")) || 1;
+  const epTo = Number(resourceUrl.searchParams.get("epTo")) || epFrom;
+  const resolution = Number(resourceUrl.searchParams.get("resolution")) || 360;
+
+  return detectors.flatMap((detector) => {
+    if (!detector.resourceLink || detector.downloadUrl) {
+      return [];
+    }
+    if (!/\/S\d+E\d+-\d+P(?:$|[?#])/i.test(detector.resourceLink)) {
+      return [];
+    }
+
+    const links = [];
+    for (let episode = epFrom; episode <= epTo; episode += 1) {
+      links.push(
+        detector.resourceLink.replace(
+          /\/S\d+E\d+-\d+P(?=$|[?#])/i,
+          `/S${season}E${episode}-${resolution}P`,
+        ),
+      );
+    }
+    return links;
+  });
+}
+
+async function buildSeriesResourceFallback(detail, resourceUrl, auth) {
+  const subjectId = resourceUrl.searchParams.get("subjectId") || "";
+  const links = getSeriesResourceLinks(detail, resourceUrl);
+  const resources = await Promise.all(
+    links.map(async (link) => {
+      const sniffUrl = new URL("/wefeed-mobile-bff/sniff/config", BASE_URL);
+      sniffUrl.searchParams.set("linkUrl", link);
+      sniffUrl.searchParams.set("subjectId", subjectId);
+      const { body } = await requestUpstreamAsync(
+        sniffUrl.href,
+        "GET",
+        null,
+        auth,
+      );
+      const sniffResponse = JSON.parse(body.toString("utf8"));
+      return sniffResponse.code === 0 ? sniffResponse.data?.resource : null;
+    }),
+  );
+  return buildResourceResponse(resources.filter(Boolean), resourceUrl);
 }
 
 function sendResponse(res, statusCode, headers, body) {
@@ -290,7 +390,7 @@ function handleResourceFallback(res, fullUrl, auth, upstreamRes, upstreamBody) {
     "GET",
     null,
     auth,
-    (error, detailRes, detailBody) => {
+    async (error, detailRes, detailBody) => {
       if (error) {
         res.status(502).json({ error: error.message });
         return;
@@ -298,10 +398,17 @@ function handleResourceFallback(res, fullUrl, auth, upstreamRes, upstreamBody) {
 
       try {
         const detailResponse = JSON.parse(detailBody.toString("utf8"));
-        const fallback = buildResourceFallback(
+        let fallback = buildResourceFallback(
           detailResponse.data || {},
           resourceUrl,
         );
+        if (!fallback.data.list.length) {
+          fallback = await buildSeriesResourceFallback(
+            detailResponse.data || {},
+            resourceUrl,
+            auth,
+          );
+        }
         const hasResources = fallback.data.list.length > 0;
         sendResponse(
           res,
