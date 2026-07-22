@@ -298,7 +298,39 @@ function buildResourceFallback(detail, resourceUrl) {
   return buildResourceResponse(list, resourceUrl);
 }
 
-function getSeriesResourceLinks(detail, resourceUrl) {
+function replaceSeriesPosition(link, season, episode) {
+  if (/S\d+E\d+/i.test(link)) {
+    return link.replace(/S\d+E\d+/i, `S${season}E${episode}`);
+  }
+
+  if (/season[-_. ]*\d+/i.test(link) && /episode[-_. ]*\d+/i.test(link)) {
+    return link
+      .replace(/season([-_. ]*)\d+/i, `season$1${season}`)
+      .replace(/episode([-_. ]*)\d+/i, `episode$1${episode}`);
+  }
+
+  return null;
+}
+
+function getSeriesLinkCandidates(link, season, episode, resolution) {
+  const positionedLink = replaceSeriesPosition(link, season, episode);
+  if (!positionedLink) {
+    return [];
+  }
+
+  const candidates = new Set();
+  candidates.add(positionedLink.replace(/\d{3,4}P/i, `${resolution}P`));
+  candidates.add(
+    positionedLink.replace(
+      /-\d{3,4}P(?:-[^/?#]+)*(?=$|[?#])/i,
+      `-${resolution}P`,
+    ),
+  );
+  candidates.add(positionedLink);
+  return [...candidates];
+}
+
+function getSeriesResourceCandidates(detail, resourceUrl) {
   const detectors = Array.isArray(detail.resourceDetectors)
     ? detail.resourceDetectors
     : [];
@@ -311,40 +343,65 @@ function getSeriesResourceLinks(detail, resourceUrl) {
     if (!detector.resourceLink || detector.downloadUrl) {
       return [];
     }
-    if (!/\/S\d+E\d+-\d+P(?:$|[?#])/i.test(detector.resourceLink)) {
-      return [];
-    }
 
-    const links = [];
+    const episodes = [];
     for (let episode = epFrom; episode <= epTo; episode += 1) {
-      links.push(
-        detector.resourceLink.replace(
-          /\/S\d+E\d+-\d+P(?=$|[?#])/i,
-          `/S${season}E${episode}-${resolution}P`,
-        ),
+      const links = getSeriesLinkCandidates(
+        detector.resourceLink,
+        season,
+        episode,
+        resolution,
       );
+      if (links.length) {
+        episodes.push({ episode, links });
+      }
     }
-    return links;
+    return episodes;
   });
+}
+
+function matchesRequestedResource(resource, resourceUrl, episode) {
+  if (!resource?.resourceLink) {
+    return false;
+  }
+
+  const season = Number(resourceUrl.searchParams.get("se")) || 1;
+  const resolution = Number(resourceUrl.searchParams.get("resolution"));
+  return (
+    Number(resource.se) === season &&
+    Number(resource.ep) === episode &&
+    (!resolution || Number(resource.resolution) === resolution)
+  );
+}
+
+async function resolveSeriesResource(subjectId, candidate, resourceUrl, auth) {
+  for (const link of candidate.links) {
+    const sniffUrl = new URL("/wefeed-mobile-bff/sniff/config", BASE_URL);
+    sniffUrl.searchParams.set("linkUrl", link);
+    sniffUrl.searchParams.set("subjectId", subjectId);
+    const { body } = await requestUpstreamAsync(
+      sniffUrl.href,
+      "GET",
+      null,
+      auth,
+    );
+    const sniffResponse = JSON.parse(body.toString("utf8"));
+    const resource =
+      sniffResponse.code === 0 ? sniffResponse.data?.resource : null;
+    if (matchesRequestedResource(resource, resourceUrl, candidate.episode)) {
+      return resource;
+    }
+  }
+  return null;
 }
 
 async function buildSeriesResourceFallback(detail, resourceUrl, auth) {
   const subjectId = resourceUrl.searchParams.get("subjectId") || "";
-  const links = getSeriesResourceLinks(detail, resourceUrl);
+  const candidates = getSeriesResourceCandidates(detail, resourceUrl);
   const resources = await Promise.all(
-    links.map(async (link) => {
-      const sniffUrl = new URL("/wefeed-mobile-bff/sniff/config", BASE_URL);
-      sniffUrl.searchParams.set("linkUrl", link);
-      sniffUrl.searchParams.set("subjectId", subjectId);
-      const { body } = await requestUpstreamAsync(
-        sniffUrl.href,
-        "GET",
-        null,
-        auth,
-      );
-      const sniffResponse = JSON.parse(body.toString("utf8"));
-      return sniffResponse.code === 0 ? sniffResponse.data?.resource : null;
-    }),
+    candidates.map((candidate) =>
+      resolveSeriesResource(subjectId, candidate, resourceUrl, auth),
+    ),
   );
   return buildResourceResponse(resources.filter(Boolean), resourceUrl);
 }
