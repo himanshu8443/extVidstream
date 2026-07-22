@@ -298,7 +298,7 @@ function buildResourceFallback(detail, resourceUrl) {
   return buildResourceResponse(list, resourceUrl);
 }
 
-function replaceSeriesPosition(link, season, episode) {
+function replaceSeriesPosition(link, season, episode, resolutionPlaceholder) {
   if (/S\d+E\d+/i.test(link)) {
     return link.replace(/S\d+E\d+/i, `S${season}E${episode}`);
   }
@@ -309,16 +309,32 @@ function replaceSeriesPosition(link, season, episode) {
       .replace(/episode([-_. ]*)\d+/i, `episode$1${episode}`);
   }
 
-  return null;
+  const numericTuple = /([_.-])(\d+)\1(\d+)\1(\d{3,4})P(?=\.[^/?#]+$|[?#]|$)/i;
+  if (numericTuple.test(link)) {
+    return link.replace(
+      numericTuple,
+      (_, separator) =>
+        `${separator}${season}${separator}${episode}${separator}` +
+        `${resolutionPlaceholder}P`,
+    );
+  }
+
+  return link;
 }
 
 function getSeriesLinkCandidates(link, season, episode, resolution) {
-  const positionedLink = replaceSeriesPosition(link, season, episode);
-  if (!positionedLink) {
-    return [];
-  }
+  const resolutionPlaceholder = "__RESOLUTION__";
+  const positionedLink = replaceSeriesPosition(
+    link,
+    season,
+    episode,
+    resolutionPlaceholder,
+  );
 
   const candidates = new Set();
+  candidates.add(
+    positionedLink.replace(`${resolutionPlaceholder}P`, `${resolution}P`),
+  );
   candidates.add(positionedLink.replace(/\d{3,4}P/i, `${resolution}P`));
   candidates.add(
     positionedLink.replace(
@@ -327,6 +343,7 @@ function getSeriesLinkCandidates(link, season, episode, resolution) {
     ),
   );
   candidates.add(positionedLink);
+  candidates.add(link);
   return [...candidates];
 }
 
