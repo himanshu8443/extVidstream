@@ -299,19 +299,22 @@ function buildResourceFallback(detail, resourceUrl) {
 }
 
 function replaceSeriesPosition(link, season, episode, resolutionPlaceholder) {
-  if (/S\d+E\d+/i.test(link)) {
-    return link.replace(/S\d+E\d+/i, `S${season}E${episode}`);
+  let result = link;
+
+  if (/S\d+E\d+/i.test(result)) {
+    result = result.replace(/S\d+E\d+/i, `S${season}E${episode}`);
   }
 
-  if (/season[-_. ]*\d+/i.test(link) && /episode[-_. ]*\d+/i.test(link)) {
-    return link
-      .replace(/season([-_. ]*)\d+/i, `season$1${season}`)
-      .replace(/episode([-_. ]*)\d+/i, `episode$1${episode}`);
+  if (/season[-_. ]*\d+/i.test(result)) {
+    result = result.replace(/season([-_. ]*)\d+/i, `season$1${season}`);
+  }
+  if (/episode[-_. ]*\d+/i.test(result)) {
+    result = result.replace(/episode([-_. ]*)\d+/i, `episode$1${episode}`);
   }
 
-  const numericTuple = /([_.-])(\d+)\1(\d+)\1(\d{3,4})P(?=\.[^/?#]+$|[?#]|$)/i;
-  if (numericTuple.test(link)) {
-    return link.replace(
+  const numericTuple = /([_.-])(\d+)\1(\d+)\1(\d{3,4})P/i;
+  if (numericTuple.test(result)) {
+    result = result.replace(
       numericTuple,
       (_, separator) =>
         `${separator}${season}${separator}${episode}${separator}` +
@@ -319,7 +322,7 @@ function replaceSeriesPosition(link, season, episode, resolutionPlaceholder) {
     );
   }
 
-  return link;
+  return result;
 }
 
 function getSeriesLinkCandidates(link, season, episode, resolution) {
@@ -412,8 +415,12 @@ async function resolveSeriesResource(subjectId, candidate, resourceUrl, auth) {
   return null;
 }
 
-async function buildSeriesResourceFallback(detail, resourceUrl, auth) {
-  const subjectId = resourceUrl.searchParams.get("subjectId") || "";
+async function buildSeriesResourceFallback(
+  detail,
+  resourceUrl,
+  auth,
+  subjectId = resourceUrl.searchParams.get("subjectId") || "",
+) {
   const candidates = getSeriesResourceCandidates(detail, resourceUrl);
   const resources = await Promise.all(
     candidates.map((candidate) =>
@@ -421,6 +428,71 @@ async function buildSeriesResourceFallback(detail, resourceUrl, auth) {
     ),
   );
   return buildResourceResponse(resources.filter(Boolean), resourceUrl);
+}
+
+function normalizeSearchTitle(title) {
+  return String(title || "")
+    .replace(
+      /\s*[[(](?:hindi|english|tamil|telugu|malayalam|kannada|urdu)[\])]/gi,
+      "",
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isMatchingSubject(subject, detail, currentSubjectId) {
+  if (!subject?.hasResource || subject.subjectId === currentSubjectId) {
+    return false;
+  }
+
+  const titleMatches =
+    normalizeSearchTitle(subject.title).toLowerCase() ===
+    normalizeSearchTitle(detail.title).toLowerCase();
+  const typeMatches =
+    Number(subject.subjectType) === Number(detail.subjectType);
+  const releaseMatches =
+    !detail.releaseDate || subject.releaseDate === detail.releaseDate;
+  return titleMatches && typeMatches && releaseMatches;
+}
+
+async function buildAlternateSubjectFallback(detail, resourceUrl, auth) {
+  const currentSubjectId = resourceUrl.searchParams.get("subjectId");
+  const keyword = normalizeSearchTitle(detail.title);
+  if (!keyword) {
+    return buildResourceResponse([], resourceUrl);
+  }
+
+  const searchUrl = new URL("/wefeed-mobile-bff/subject-api/search", BASE_URL);
+  const searchBody = JSON.stringify({ page: 1, keyword });
+  const { body } = await requestUpstreamAsync(
+    searchUrl.href,
+    "POST",
+    searchBody,
+    auth,
+  );
+  const searchResponse = JSON.parse(body.toString("utf8"));
+  const matches = Array.isArray(searchResponse.data?.items)
+    ? searchResponse.data.items.filter((subject) =>
+        isMatchingSubject(subject, detail, currentSubjectId),
+      )
+    : [];
+
+  for (const subject of matches) {
+    let fallback = buildResourceFallback(subject, resourceUrl);
+    if (!fallback.data.list.length) {
+      fallback = await buildSeriesResourceFallback(
+        subject,
+        resourceUrl,
+        auth,
+        subject.subjectId,
+      );
+    }
+    if (fallback.data.list.length) {
+      return fallback;
+    }
+  }
+
+  return buildResourceResponse([], resourceUrl);
 }
 
 function sendResponse(res, statusCode, headers, body) {
@@ -478,6 +550,13 @@ function handleResourceFallback(res, fullUrl, auth, upstreamRes, upstreamBody) {
         );
         if (!fallback.data.list.length) {
           fallback = await buildSeriesResourceFallback(
+            detailResponse.data || {},
+            resourceUrl,
+            auth,
+          );
+        }
+        if (!fallback.data.list.length) {
+          fallback = await buildAlternateSubjectFallback(
             detailResponse.data || {},
             resourceUrl,
             auth,
