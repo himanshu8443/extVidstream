@@ -262,9 +262,9 @@ function getDetectorResources(detector, resourceUrl) {
   ];
 }
 
-function buildResourceResponse(list, resourceUrl) {
+function buildResourceResponse(list, resourceUrl, filterResolution = true) {
   const resolution = Number(resourceUrl.searchParams.get("resolution"));
-  if (resolution > 0) {
+  if (filterResolution && resolution > 0) {
     list = list.filter((resource) => resource.resolution === resolution);
   }
 
@@ -347,6 +347,14 @@ function getSeriesLinkCandidates(link, season, episode, resolution) {
   );
   candidates.add(positionedLink);
   candidates.add(link);
+  for (const candidate of [...candidates]) {
+    const resolutionChain = candidate.match(
+      /(-r\d{3,4}P(?:-\d+)?)(?:-r\d{3,4}P(?:-\d+)?)+(?=$|[?#])/i,
+    );
+    if (resolutionChain) {
+      candidates.add(candidate.replace(resolutionChain[0], resolutionChain[1]));
+    }
+  }
   return [...candidates];
 }
 
@@ -380,7 +388,12 @@ function getSeriesResourceCandidates(detail, resourceUrl) {
   });
 }
 
-function matchesRequestedResource(resource, resourceUrl, episode) {
+function matchesRequestedResource(
+  resource,
+  resourceUrl,
+  episode,
+  requireResolution = true,
+) {
   if (!resource?.resourceLink) {
     return false;
   }
@@ -390,11 +403,20 @@ function matchesRequestedResource(resource, resourceUrl, episode) {
   return (
     Number(resource.se) === season &&
     Number(resource.ep) === episode &&
-    (!resolution || Number(resource.resolution) === resolution)
+    (!requireResolution ||
+      !resolution ||
+      Number(resource.resolution) === resolution)
   );
 }
 
-async function resolveSeriesResource(subjectId, candidate, resourceUrl, auth) {
+async function resolveSeriesResource(
+  subjectId,
+  candidate,
+  resourceUrl,
+  auth,
+  requireResolution,
+) {
+  let bestResource = null;
   for (const link of candidate.links) {
     const sniffUrl = new URL("/wefeed-mobile-bff/sniff/config", BASE_URL);
     sniffUrl.searchParams.set("linkUrl", link);
@@ -408,11 +430,26 @@ async function resolveSeriesResource(subjectId, candidate, resourceUrl, auth) {
     const sniffResponse = JSON.parse(body.toString("utf8"));
     const resource =
       sniffResponse.code === 0 ? sniffResponse.data?.resource : null;
-    if (matchesRequestedResource(resource, resourceUrl, candidate.episode)) {
-      return resource;
+    if (
+      matchesRequestedResource(
+        resource,
+        resourceUrl,
+        candidate.episode,
+        requireResolution,
+      )
+    ) {
+      if (requireResolution) {
+        return resource;
+      }
+      if (
+        !bestResource ||
+        Number(resource.resolution) > Number(bestResource.resolution)
+      ) {
+        bestResource = resource;
+      }
     }
   }
-  return null;
+  return bestResource;
 }
 
 async function buildSeriesResourceFallback(
@@ -420,14 +457,25 @@ async function buildSeriesResourceFallback(
   resourceUrl,
   auth,
   subjectId = resourceUrl.searchParams.get("subjectId") || "",
+  requireResolution = true,
 ) {
   const candidates = getSeriesResourceCandidates(detail, resourceUrl);
   const resources = await Promise.all(
     candidates.map((candidate) =>
-      resolveSeriesResource(subjectId, candidate, resourceUrl, auth),
+      resolveSeriesResource(
+        subjectId,
+        candidate,
+        resourceUrl,
+        auth,
+        requireResolution,
+      ),
     ),
   );
-  return buildResourceResponse(resources.filter(Boolean), resourceUrl);
+  return buildResourceResponse(
+    resources.filter(Boolean),
+    resourceUrl,
+    requireResolution,
+  );
 }
 
 function normalizeSearchTitle(title) {
@@ -455,7 +503,12 @@ function isMatchingSubject(subject, detail, currentSubjectId) {
   return titleMatches && typeMatches && releaseMatches;
 }
 
-async function buildAlternateSubjectFallback(detail, resourceUrl, auth) {
+async function buildAlternateSubjectFallback(
+  detail,
+  resourceUrl,
+  auth,
+  requireResolution = true,
+) {
   const currentSubjectId = resourceUrl.searchParams.get("subjectId");
   const keyword = normalizeSearchTitle(detail.title);
   if (!keyword) {
@@ -485,6 +538,58 @@ async function buildAlternateSubjectFallback(detail, resourceUrl, auth) {
         resourceUrl,
         auth,
         subject.subjectId,
+        requireResolution,
+      );
+    }
+    if (fallback.data.list.length) {
+      return fallback;
+    }
+  }
+
+  return buildResourceResponse([], resourceUrl);
+}
+
+async function buildAvailableSeasonFallback(detail, resourceUrl, auth) {
+  const subjectId = resourceUrl.searchParams.get("subjectId") || "";
+  const seasonInfoUrl = new URL(
+    "/wefeed-mobile-bff/subject-api/season-info",
+    BASE_URL,
+  );
+  seasonInfoUrl.searchParams.set("subjectId", subjectId);
+  const { body } = await requestUpstreamAsync(
+    seasonInfoUrl.href,
+    "GET",
+    null,
+    auth,
+  );
+  const seasonInfo = JSON.parse(body.toString("utf8"));
+  const seasons = Array.isArray(seasonInfo.data?.seasons)
+    ? seasonInfo.data.seasons
+    : [];
+  const requestedSeason = Number(resourceUrl.searchParams.get("se")) || 1;
+  if (
+    !seasons.length ||
+    seasons.some((season) => Number(season.se) === requestedSeason)
+  ) {
+    return buildResourceResponse([], resourceUrl);
+  }
+
+  for (const season of seasons) {
+    const availableUrl = new URL(resourceUrl.href);
+    availableUrl.searchParams.set("se", season.se);
+    let fallback = await buildSeriesResourceFallback(
+      detail,
+      availableUrl,
+      auth,
+      subjectId,
+    );
+    if (!fallback.data.list.length) {
+      fallback = await buildSeriesResourceFallback(
+        detail,
+        availableUrl,
+        auth,
+        subjectId,
+        false,
       );
     }
     if (fallback.data.list.length) {
@@ -557,6 +662,30 @@ function handleResourceFallback(res, fullUrl, auth, upstreamRes, upstreamBody) {
         }
         if (!fallback.data.list.length) {
           fallback = await buildAlternateSubjectFallback(
+            detailResponse.data || {},
+            resourceUrl,
+            auth,
+          );
+        }
+        if (!fallback.data.list.length) {
+          fallback = await buildSeriesResourceFallback(
+            detailResponse.data || {},
+            resourceUrl,
+            auth,
+            subjectId,
+            false,
+          );
+        }
+        if (!fallback.data.list.length) {
+          fallback = await buildAlternateSubjectFallback(
+            detailResponse.data || {},
+            resourceUrl,
+            auth,
+            false,
+          );
+        }
+        if (!fallback.data.list.length) {
+          fallback = await buildAvailableSeasonFallback(
             detailResponse.data || {},
             resourceUrl,
             auth,
