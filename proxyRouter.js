@@ -438,9 +438,7 @@ async function resolveSeriesResource(
         requireResolution,
       )
     ) {
-      if (requireResolution) {
-        return resource;
-      }
+      if (requireResolution) return resource;
       if (
         !bestResource ||
         Number(resource.resolution) > Number(bestResource.resolution)
@@ -481,7 +479,7 @@ async function buildSeriesResourceFallback(
 function normalizeSearchTitle(title) {
   return String(title || "")
     .replace(
-      /\s*[[(](?:hindi|english|tamil|telugu|malayalam|kannada|urdu)[\])]/gi,
+      /\s*[[(](?:hindi|english|tamil|telugu|malayalam|kannada|urdu|spanish(?:latam)?|latam|dubbed)[\])]/gi,
       "",
     )
     .replace(/\s+/g, " ")
@@ -550,7 +548,7 @@ async function buildAlternateSubjectFallback(
 }
 
 async function buildAvailableSeasonFallback(detail, resourceUrl, auth) {
-  const subjectId = resourceUrl.searchParams.get("subjectId") || "";
+  const subjectId = resourceUrl.searchParams.get("subjectId");
   const seasonInfoUrl = new URL(
     "/wefeed-mobile-bff/subject-api/season-info",
     BASE_URL,
@@ -569,7 +567,7 @@ async function buildAvailableSeasonFallback(detail, resourceUrl, auth) {
   const requestedSeason = Number(resourceUrl.searchParams.get("se")) || 1;
   if (
     !seasons.length ||
-    seasons.some((season) => Number(season.se) === requestedSeason)
+    seasons.some((season) => season.se === requestedSeason)
   ) {
     return buildResourceResponse([], resourceUrl);
   }
@@ -581,20 +579,18 @@ async function buildAvailableSeasonFallback(detail, resourceUrl, auth) {
       detail,
       availableUrl,
       auth,
-      subjectId,
+      subjectId || "",
     );
     if (!fallback.data.list.length) {
       fallback = await buildSeriesResourceFallback(
         detail,
         availableUrl,
         auth,
-        subjectId,
+        subjectId || "",
         false,
       );
     }
-    if (fallback.data.list.length) {
-      return fallback;
-    }
+    if (fallback.data.list.length) return fallback;
   }
 
   return buildResourceResponse([], resourceUrl);
@@ -672,7 +668,7 @@ function handleResourceFallback(res, fullUrl, auth, upstreamRes, upstreamBody) {
             detailResponse.data || {},
             resourceUrl,
             auth,
-            subjectId,
+            subjectId || "",
             false,
           );
         }
