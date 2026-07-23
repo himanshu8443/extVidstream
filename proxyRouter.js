@@ -364,7 +364,7 @@ function getSeriesResourceCandidates(detail, resourceUrl) {
     : [];
   const season = Number(resourceUrl.searchParams.get("se")) || 1;
   const epFrom = Number(resourceUrl.searchParams.get("epFrom")) || 1;
-  const epTo = Number(resourceUrl.searchParams.get("epTo")) || epFrom;
+  const epTo = Number(resourceUrl.searchParams.get("epTo")) || 20;
   const resolution = Number(resourceUrl.searchParams.get("resolution")) || 360;
 
   return detectors.flatMap((detector) => {
