@@ -2,11 +2,7 @@ const express = require("express");
 
 const router = express.Router();
 
-const FORBIDDEN_HEADER_KEYS = new Set([
-  "host",
-  "connection",
-  "content-length",
-]);
+const FORBIDDEN_HEADER_KEYS = new Set(["host", "connection", "content-length"]);
 
 function parseTargetUrl(req) {
   let targetUrl = req.body?.url || req.query?.url;
@@ -64,7 +60,11 @@ function parseHeaders(req) {
 
   const sanitizedHeaders = {};
   for (const [key, value] of Object.entries(parsedHeaders)) {
-    if (!FORBIDDEN_HEADER_KEYS.has(key.toLowerCase()) && value !== undefined && value !== null) {
+    if (
+      !FORBIDDEN_HEADER_KEYS.has(key.toLowerCase()) &&
+      value !== undefined &&
+      value !== null
+    ) {
       sanitizedHeaders[key] = String(value);
     }
   }
@@ -108,17 +108,60 @@ function buildFetchOptions(req, headers) {
   return options;
 }
 
-function copyResponseHeaders(res, upstreamResponse) {
+function inferContentType(targetUrl, upstreamContentType, buffer) {
+  if (
+    upstreamContentType &&
+    upstreamContentType !== "application/octet-stream" &&
+    upstreamContentType !== "binary/octet-stream"
+  ) {
+    return upstreamContentType;
+  }
+
+  if (buffer && buffer.subarray(0, 6).toString("utf8") === "WEBVTT") {
+    return "text/vtt; charset=utf-8";
+  }
+
+  let pathname = "";
+  try {
+    pathname = new URL(targetUrl).pathname.toLowerCase();
+  } catch {}
+
+  if (pathname.endsWith(".vtt")) return "text/vtt; charset=utf-8";
+  if (pathname.endsWith(".srt")) return "text/plain; charset=utf-8";
+  if (pathname.endsWith(".m3u8")) return "application/vnd.apple.mpegurl";
+  if (pathname.endsWith(".json")) return "application/json; charset=utf-8";
+  if (pathname.endsWith(".txt")) return "text/plain; charset=utf-8";
+
+  return upstreamContentType || "application/octet-stream";
+}
+
+function copyResponseHeaders(res, upstreamResponse, targetUrl, buffer) {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD");
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD",
+  );
   res.setHeader("Access-Control-Allow-Headers", "*");
 
   upstreamResponse.headers.forEach((value, key) => {
     const lowerKey = key.toLowerCase();
-    if (!["content-length", "content-encoding", "access-control-allow-origin"].includes(lowerKey)) {
+    if (
+      ![
+        "content-length",
+        "content-encoding",
+        "access-control-allow-origin",
+        "content-type",
+      ].includes(lowerKey)
+    ) {
       res.setHeader(key, value);
     }
   });
+
+  const rawContentType = upstreamResponse.headers.get("content-type");
+  const finalContentType = inferContentType(targetUrl, rawContentType, buffer);
+  if (finalContentType) {
+    res.setHeader("Content-Type", finalContentType);
+  }
 }
 
 async function forwardDetailsResponse(res, upstreamResponse) {
@@ -148,18 +191,22 @@ async function forwardDetailsResponse(res, upstreamResponse) {
   });
 }
 
-async function forwardStreamResponse(res, upstreamResponse) {
-  copyResponseHeaders(res, upstreamResponse);
-  res.status(upstreamResponse.status);
-
+async function forwardStreamResponse(res, upstreamResponse, targetUrl) {
   const arrayBuffer = await upstreamResponse.arrayBuffer();
-  res.end(Buffer.from(arrayBuffer));
+  const buffer = Buffer.from(arrayBuffer);
+
+  copyResponseHeaders(res, upstreamResponse, targetUrl, buffer);
+  res.status(upstreamResponse.status);
+  res.end(buffer);
 }
 
 async function handleFetch(req, res) {
   if (req.method === "OPTIONS") {
     res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD");
+    res.setHeader(
+      "Access-Control-Allow-Methods",
+      "GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD",
+    );
     res.setHeader("Access-Control-Allow-Headers", "*");
     return res.sendStatus(204);
   }
@@ -179,13 +226,12 @@ async function handleFetch(req, res) {
     const upstreamResponse = await fetch(targetUrl, fetchOptions);
 
     const wantsDetails =
-      req.query?.details === "true" ||
-      req.body?.responseType === "details";
+      req.query?.details === "true" || req.body?.responseType === "details";
 
     if (wantsDetails) {
       await forwardDetailsResponse(res, upstreamResponse);
     } else {
-      await forwardStreamResponse(res, upstreamResponse);
+      await forwardStreamResponse(res, upstreamResponse, targetUrl);
     }
   } catch (error) {
     res.status(502).json({
