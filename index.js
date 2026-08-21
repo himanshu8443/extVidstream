@@ -1,10 +1,8 @@
 const express = require("express");
-const decryptRouter = require("./decryptRouter");
-const whvxTokenRouter = require("./whvxTokenRouter");
-const cinemaLuxeRouter = require("./cinemaLuxeDecrypt");
 const vidsrcRouter = require("./vidsrc/vidsrcRoute");
 const proxyRouter = require("./proxyRouter");
 const cryptoRouter = require("./cryptoRouter");
+const fetchRouter = require("./fetchRouter");
 const globalRateLimiter = require("./rateLimiter");
 
 const app = express();
@@ -16,12 +14,10 @@ app.use(express.json());
 app.use(bodyParser.text());
 app.use(bodyParser.json());
 
-app.use("/api", decryptRouter);
-app.use("/api", whvxTokenRouter);
-app.use("/api", cinemaLuxeRouter);
 app.use("/api", vidsrcRouter);
 app.use("/api", proxyRouter);
 app.use("/api", cryptoRouter);
+app.use("/api", fetchRouter);
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
